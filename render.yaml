@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: xiaozhi-mcp-gold-news
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 cloud_server.py
+    envVars:
+      - key: MCP_ENDPOINT
+        sync: false
+      - key: MCP_CONFIG
+        value: mcp_config.cloud.json

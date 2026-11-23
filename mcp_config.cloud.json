@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "GoldAndNews": {
+      "command": "python3",
+      "args": ["gold_price.py"],
+      "type": "stdio"
+    },
+    "VnExpress": {
+      "command": "python3",
+      "args": ["VnExpress.py"],
+      "type": "stdio"
+    }
+  }
+}
