@@ -127,5 +127,41 @@ def get_thoi_su_noi_bat(scope: str = "both", limit: int = 5) -> dict:
     return output
 
 
+@mcp.tool()
+def get_vov_radio_url(channel: str = "vov1") -> dict:
+    """
+    Lấy link stream radio VOV (định dạng AAC/AAC+ trực tiếp) đang hoạt động tốt để phát trên ESP32-S3.
+    Dùng tool này khi người dùng muốn nghe đài VOV, mở radio VOV, VOV1, VOV thời sự.
+    Sau khi nhận được kết quả, AI PHẢI gọi ngay tool `self.radio.play_url` với `url` và `station_name` trả về
+    (KHÔNG dùng `self.radio.play_station` vì server vovmedia.vn mặc định đang lỗi SSL).
+    Args:
+        channel: Tên kênh VOV (ví dụ 'vov1', 'vov2', 'vov3', 'vov5', 'vovgt').
+    """
+    candidates = [
+        ("VOV1 - Thời sự (Kênh dự phòng 7001)", "http://media.kythuatvov.vn:7001/;stream/"),
+        ("VOV1 - Thời sự (Kênh dự phòng 7007)", "http://media.kythuatvov.vn:7007/;stream/"),
+        ("VOV1 - Thời sự (Kênh dự phòng 7009)", "http://media.kythuatvov.vn:7009/;stream/"),
+    ]
+    for name, url in candidates:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "VLC/3.0"})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                if resp.status == 200:
+                    return {
+                        "success": True,
+                        "requested_channel": channel,
+                        "station_name": name,
+                        "url": url,
+                        "instruction": "Hãy gọi ngay self.radio.play_url với url và station_name này để phát radio trên loa.",
+                    }
+        except Exception:
+            continue
+
+    return {
+        "success": False,
+        "message": "Hiện tại các kênh stream VOV đều đang không phản hồi.",
+    }
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
