@@ -1,4 +1,6 @@
 from mcp.server.fastmcp import FastMCP
+from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor
 import sys
 import re
 import html
@@ -14,7 +16,22 @@ mcp = FastMCP("GoldAndNews")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "application/json, application/xml, text/xml, */*",
+    "Accept": "text/html, application/json, application/xml, text/xml, */*",
+}
+
+NEWS_FEEDS = {
+    "domestic": [
+        ("VnExpress", "vnexpress", "https://vnexpress.net/rss/thoi-su.rss"),
+        ("Tuổi Trẻ", "tuoitre", "https://tuoitre.vn/rss/thoi-su.rss"),
+        ("Thanh Niên", "thanhnien", "https://thanhnien.vn/rss/thoi-su.rss"),
+        ("Dân Trí", "dantri", "https://dantri.com.vn/rss/su-kien.rss"),
+        ("VietnamNet", "vietnamnet", "https://vietnamnet.vn/rss/thoi-su.rss"),
+    ],
+    "international": [
+        ("VnExpress", "vnexpress", "https://vnexpress.net/rss/the-gioi.rss"),
+        ("Tuổi Trẻ", "tuoitre", "https://tuoitre.vn/rss/the-gioi.rss"),
+        ("Thanh Niên", "thanhnien", "https://thanhnien.vn/rss/the-gioi.rss"),
+    ],
 }
 
 
@@ -31,6 +48,31 @@ def _clean_html(text: str) -> str:
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def _fetch_single_feed(source_name: str, url: str, per_feed_limit: int) -> list[dict]:
+    items_list = []
+    try:
+        xml_text = _http_get(url, timeout=10)
+        root = ET.fromstring(xml_text)
+        for item in root.findall("./channel/item")[:per_feed_limit]:
+            title = _clean_html(item.findtext("title") or "")
+            desc = _clean_html(item.findtext("description") or "")
+            link = (item.findtext("link") or "").strip()
+            pub_date = (item.findtext("pubDate") or "").strip()
+            if len(desc) > 220:
+                desc = desc[:220].rstrip() + "..."
+            if title and link:
+                items_list.append({
+                    "source": source_name,
+                    "title": title,
+                    "summary": desc,
+                    "url": link,
+                    "published_at": pub_date,
+                })
+    except Exception:
+        pass
+    return items_list
 
 
 @mcp.tool()
@@ -79,88 +121,130 @@ def get_gold_price() -> dict:
 
 
 @mcp.tool()
-def get_thoi_su_noi_bat(scope: str = "both", limit: int = 5) -> dict:
+def get_thoi_su_noi_bat(scope: str = "both", source: str = "all", limit: int = 6) -> dict:
     """
-    Lấy tin tức thời sự nổi bật mới nhất trong nước (Việt Nam) và/hoặc quốc tế (thế giới) từ RSS VnExpress.
+    Lấy tin tức thời sự nổi bật mới nhất trong nước (Việt Nam) và/hoặc quốc tế (thế giới)
+    từ nhiều đầu báo lớn: VnExpress, Tuổi Trẻ, Thanh Niên, Dân Trí, VietnamNet.
+    Mỗi tin đều có sẵn `url` để người dùng có thể yêu cầu đọc nội dung đầy đủ bằng `get_full_article`.
     Args:
         scope: 'domestic' (trong nước), 'international' (quốc tế), hoặc 'both' (cả hai, mặc định).
-        limit: Số lượng tin mỗi mục (mặc định 5, tối đa 8).
+        source: 'all' (tổng hợp nhiều báo, mặc định), hoặc 'vnexpress', 'tuoitre', 'thanhnien', 'dantri', 'vietnamnet'.
+        limit: Số lượng tin mỗi mục (mặc định 6, tối đa 12).
     """
-    limit = max(1, min(int(limit), 8))
+    limit = max(1, min(int(limit), 12))
     scope_norm = (scope or "both").strip().lower()
+    source_norm = (source or "all").strip().lower()
 
-    feeds = []
+    scopes = []
     if scope_norm in ("domestic", "trong_nuoc", "both"):
-        feeds.append(("domestic_news", "https://vnexpress.net/rss/thoi-su.rss"))
+        scopes.append(("domestic_news", NEWS_FEEDS["domestic"]))
     if scope_norm in ("international", "quoc_te", "world", "both"):
-        feeds.append(("international_news", "https://vnexpress.net/rss/the-gioi.rss"))
-    if not feeds:
-        feeds = [
-            ("domestic_news", "https://vnexpress.net/rss/thoi-su.rss"),
-            ("international_news", "https://vnexpress.net/rss/the-gioi.rss"),
+        scopes.append(("international_news", NEWS_FEEDS["international"]))
+    if not scopes:
+        scopes = [
+            ("domestic_news", NEWS_FEEDS["domestic"]),
+            ("international_news", NEWS_FEEDS["international"]),
         ]
 
     output = {"success": False}
-    for key, url in feeds:
-        items_list = []
-        try:
-            xml_text = _http_get(url, timeout=10)
-            root = ET.fromstring(xml_text)
-            for item in root.findall("./channel/item")[:limit]:
-                title = _clean_html(item.findtext("title") or "")
-                desc = _clean_html(item.findtext("description") or "")
-                pub_date = (item.findtext("pubDate") or "").strip()
-                if len(desc) > 220:
-                    desc = desc[:220].rstrip() + "..."
-                if title:
-                    items_list.append({
-                        "title": title,
-                        "summary": desc,
-                        "published_at": pub_date,
-                    })
-            if items_list:
-                output["success"] = True
-        except Exception as e:
-            output[f"{key}_error"] = str(e)
-        output[key] = items_list
+    for out_key, feed_list in scopes:
+        selected = [
+            (name, url)
+            for name, code, url in feed_list
+            if source_norm == "all" or source_norm == code
+        ]
+        if not selected:
+            selected = [(name, url) for name, _, url in feed_list]
+
+        per_feed = limit if len(selected) == 1 else max(2, (limit // len(selected)) + 2)
+        with ThreadPoolExecutor(max_workers=len(selected)) as pool:
+            results = list(pool.map(lambda f: _fetch_single_feed(f[0], f[1], per_feed), selected))
+
+        # Interleave items round-robin across newspapers so results are diverse
+        merged = []
+        idx = 0
+        while len(merged) < limit:
+            added = False
+            for r in results:
+                if idx < len(r):
+                    merged.append(r[idx])
+                    added = True
+                    if len(merged) >= limit:
+                        break
+            if not added:
+                break
+            idx += 1
+
+        if merged:
+            output["success"] = True
+        output[out_key] = merged
 
     return output
 
 
 @mcp.tool()
-def get_vov_radio_url(channel: str = "vov1") -> dict:
+def get_full_article(url: str) -> dict:
     """
-    Lấy link stream radio VOV (định dạng AAC/AAC+ trực tiếp) đang hoạt động tốt để phát trên ESP32-S3.
-    Dùng tool này khi người dùng muốn nghe đài VOV, mở radio VOV, VOV1, VOV thời sự.
-    Sau khi nhận được kết quả, AI PHẢI gọi ngay tool `self.radio.play_url` với `url` và `station_name` trả về
-    (KHÔNG dùng `self.radio.play_station` vì server vovmedia.vn mặc định đang lỗi SSL).
+    Đọc nội dung đầy đủ của một bài báo từ link `url` (hỗ trợ VnExpress, Tuổi Trẻ, Thanh Niên, Dân Trí, VietnamNet và các báo phổ biến).
+    Dùng tool này khi người dùng muốn nghe chi tiết / đọc đầy đủ một tin tức vừa được điểm qua.
     Args:
-        channel: Tên kênh VOV (ví dụ 'vov1', 'vov2', 'vov3', 'vov5', 'vovgt').
+        url: Đường dẫn URL của bài báo.
     """
-    candidates = [
-        ("VOV1 - Thời sự (Kênh dự phòng 7001)", "http://media.kythuatvov.vn:7001/;stream/"),
-        ("VOV1 - Thời sự (Kênh dự phòng 7007)", "http://media.kythuatvov.vn:7007/;stream/"),
-        ("VOV1 - Thời sự (Kênh dự phòng 7009)", "http://media.kythuatvov.vn:7009/;stream/"),
-    ]
-    for name, url in candidates:
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "VLC/3.0"})
-            with urllib.request.urlopen(req, timeout=4) as resp:
-                if resp.status == 200:
-                    return {
-                        "success": True,
-                        "requested_channel": channel,
-                        "station_name": name,
-                        "url": url,
-                        "instruction": "Hãy gọi ngay self.radio.play_url với url và station_name này để phát radio trên loa.",
-                    }
-        except Exception:
-            continue
+    if not url or not url.startswith("http"):
+        return {"success": False, "message": "URL bài báo không hợp lệ"}
 
-    return {
-        "success": False,
-        "message": "Hiện tại các kênh stream VOV đều đang không phản hồi.",
-    }
+    try:
+        html_text = _http_get(url, timeout=12)
+        soup = BeautifulSoup(html_text, "html.parser")
+
+        for tag in soup(["script", "style", "noscript", "iframe", "aside", "nav", "footer"]):
+            tag.decompose()
+
+        title_el = soup.select_one("h1.title-detail, h1.detail-title, h1.article-title, h1.title-page, h1.content-detail-title, h1")
+        title = title_el.get_text(" ", strip=True) if title_el else ""
+
+        sapo_el = soup.select_one("p.description, h2.detail-sapo, h2.singular-sapo, div.content-detail-sapo, .sapo")
+        sapo = sapo_el.get_text(" ", strip=True) if sapo_el else ""
+
+        content_selectors = [
+            "article.fck_detail",
+            "div.detail-content",
+            "div.singular-content",
+            "div.maincontent",
+            "div.content-detail",
+            "div.detail__content",
+            "article",
+        ]
+        paragraphs = []
+        for sel in content_selectors:
+            container = soup.select_one(sel)
+            if container:
+                for p in container.find_all("p"):
+                    txt = p.get_text(" ", strip=True)
+                    if len(txt) > 25:
+                        paragraphs.append(txt)
+                if paragraphs:
+                    break
+
+        if not paragraphs:
+            for p in soup.find_all("p"):
+                txt = p.get_text(" ", strip=True)
+                if len(txt) > 40:
+                    paragraphs.append(txt)
+
+        body = "\n".join(paragraphs)
+        if len(body) > 4500:
+            body = body[:4500].rsplit(" ", 1)[0] + "..."
+
+        return {
+            "success": bool(body or sapo),
+            "url": url,
+            "title": title,
+            "sapo": sapo,
+            "content": body,
+        }
+    except Exception as e:
+        return {"success": False, "url": url, "message": f"Không đọc được bài báo: {e}"}
 
 
 if __name__ == "__main__":
