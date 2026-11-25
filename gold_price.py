@@ -3,11 +3,15 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 import sys
 import re
+import time
 import gzip
 import html
 import urllib.request
 import json
 import xml.etree.ElementTree as ET
+
+FEED_CACHE: dict[str, tuple[float, list[dict]]] = {}
+FEED_CACHE_TTL = 180  # 3 minutes
 
 if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8")
@@ -85,17 +89,21 @@ def _clean_html(text: str) -> str:
 
 
 def _fetch_single_feed(source_name: str, url: str, per_feed_limit: int) -> list[dict]:
+    now = time.time()
+    cached = FEED_CACHE.get(url)
+    if cached and (now - cached[0]) < FEED_CACHE_TTL:
+        return cached[1][:per_feed_limit]
+
     items_list = []
+    max_store = max(15, per_feed_limit)
     try:
-        body = _http_get(url, timeout=10)
+        body = _http_get(url, timeout=5)
         if "quantrimang.com" in url or "baohaiphong.vn" in url:
-            soup = BeautifulSoup(body, "html.parser")
             seen_urls = set()
             base_domain = "https://quantrimang.com" if "quantrimang.com" in url else "https://baohaiphong.vn"
             pattern = r"-\d{5,}$" if "quantrimang.com" in url else r"-\d{5,}\.html$"
-            for a in soup.find_all("a", href=True):
-                href = a.get("href", "")
-                title = a.get_text(" ", strip=True)
+            for href, raw_title in re.findall(r'<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', body, re.S):
+                title = _clean_html(raw_title)
                 if len(title) > 25 and re.search(pattern, href):
                     full_url = href if href.startswith("http") else f"{base_domain}{href}"
                     if full_url not in seen_urls:
@@ -107,12 +115,14 @@ def _fetch_single_feed(source_name: str, url: str, per_feed_limit: int) -> list[
                             "url": full_url,
                             "published_at": "",
                         })
-                        if len(items_list) >= per_feed_limit:
+                        if len(items_list) >= max_store:
                             break
-            return items_list
+            if items_list:
+                FEED_CACHE[url] = (now, items_list)
+            return items_list[:per_feed_limit]
 
         root = ET.fromstring(body)
-        for item in root.findall("./channel/item")[:per_feed_limit]:
+        for item in root.findall("./channel/item")[:max_store]:
             title = _clean_html(item.findtext("title") or "")
             desc = _clean_html(item.findtext("description") or "")
             link = (item.findtext("link") or "").strip()
@@ -127,9 +137,11 @@ def _fetch_single_feed(source_name: str, url: str, per_feed_limit: int) -> list[
                     "url": link,
                     "published_at": pub_date,
                 })
+        if items_list:
+            FEED_CACHE[url] = (now, items_list)
     except Exception:
         pass
-    return items_list
+    return items_list[:per_feed_limit]
 
 
 @mcp.tool()
@@ -215,8 +227,11 @@ def get_thoi_su_noi_bat(scope: str = "both", source: str = "all", limit: int = 8
             ("international_news", NEWS_FEEDS["international"]),
         ]
 
-    output = {"success": False}
+    # Build all feed tasks across all requested scopes and fetch in parallel
+    tasks: list[tuple[str, str, str, int]] = []
+    scope_order: list[str] = []
     for out_key, feed_list in scopes:
+        scope_order.append(out_key)
         selected = [
             (name, url)
             for name, code, url in feed_list
@@ -224,11 +239,20 @@ def get_thoi_su_noi_bat(scope: str = "both", source: str = "all", limit: int = 8
         ]
         if not selected:
             selected = [(name, url) for name, _, url in feed_list]
-
         per_feed = limit if len(selected) == 1 else max(2, (limit // len(selected)) + 2)
-        with ThreadPoolExecutor(max_workers=len(selected)) as pool:
-            results = list(pool.map(lambda f: _fetch_single_feed(f[0], f[1], per_feed), selected))
+        for name, url in selected:
+            tasks.append((out_key, name, url, per_feed))
 
+    with ThreadPoolExecutor(max_workers=min(12, max(1, len(tasks)))) as pool:
+        fetched = list(pool.map(lambda t: (t[0], _fetch_single_feed(t[1], t[2], t[3])), tasks))
+
+    grouped: dict[str, list[list[dict]]] = {k: [] for k in scope_order}
+    for out_key, items in fetched:
+        grouped[out_key].append(items)
+
+    output = {"success": False}
+    for out_key in scope_order:
+        results = grouped[out_key]
         # Interleave items round-robin across newspapers so results are diverse
         merged = []
         idx = 0
