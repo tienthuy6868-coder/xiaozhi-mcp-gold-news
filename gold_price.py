@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 import sys
 import re
+import gzip
 import html
 import urllib.request
 import json
@@ -28,6 +29,7 @@ NEWS_FEEDS = {
         ("VietnamNet", "vietnamnet", "https://vietnamnet.vn/rss/thoi-su.rss"),
         ("Người Lao Động", "nld", "https://nld.com.vn/rss/thoi-su.rss"),
         ("VTC News", "vtcnews", "https://vtcnews.vn/rss/thoi-su.rss"),
+        ("Giáo dục & Thời đại", "giaoducthoidai", "https://giaoducthoidai.vn/rss/thoi-su.rss"),
     ],
     "international": [
         ("VnExpress", "vnexpress", "https://vnexpress.net/rss/the-gioi.rss"),
@@ -39,13 +41,20 @@ NEWS_FEEDS = {
         ("VTC News", "vtcnews", "https://vtcnews.vn/rss/the-gioi.rss"),
         ("BBC Tiếng Việt", "bbc", "https://feeds.bbci.co.uk/vietnamese/rss.xml"),
     ],
+    "tech": [
+        ("Tinh tế", "tinhte", "https://tinhte.vn/rss"),
+        ("Quản trị mạng", "quantrimang", "https://quantrimang.com/"),
+    ],
 }
 
 
 def _http_get(url: str, timeout: int = 10) -> str:
     req = urllib.request.Request(url, headers=HEADERS)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+        raw = resp.read()
+        if resp.headers.get("Content-Encoding") == "gzip" or raw[:2] == b"\x1f\x8b":
+            raw = gzip.decompress(raw)
+        return raw.decode("utf-8", errors="replace")
 
 
 def _clean_html(text: str) -> str:
@@ -60,8 +69,29 @@ def _clean_html(text: str) -> str:
 def _fetch_single_feed(source_name: str, url: str, per_feed_limit: int) -> list[dict]:
     items_list = []
     try:
-        xml_text = _http_get(url, timeout=10)
-        root = ET.fromstring(xml_text)
+        body = _http_get(url, timeout=10)
+        if "quantrimang.com" in url:
+            soup = BeautifulSoup(body, "html.parser")
+            seen_urls = set()
+            for a in soup.find_all("a", href=True):
+                href = a.get("href", "")
+                title = a.get_text(" ", strip=True)
+                if len(title) > 25 and re.search(r"-\d{5,}$", href):
+                    full_url = href if href.startswith("http") else f"https://quantrimang.com{href}"
+                    if full_url not in seen_urls:
+                        seen_urls.add(full_url)
+                        items_list.append({
+                            "source": source_name,
+                            "title": title,
+                            "summary": "",
+                            "url": full_url,
+                            "published_at": "",
+                        })
+                        if len(items_list) >= per_feed_limit:
+                            break
+            return items_list
+
+        root = ET.fromstring(body)
         for item in root.findall("./channel/item")[:per_feed_limit]:
             title = _clean_html(item.findtext("title") or "")
             desc = _clean_html(item.findtext("description") or "")
@@ -130,23 +160,30 @@ def get_gold_price() -> dict:
 @mcp.tool()
 def get_thoi_su_noi_bat(scope: str = "both", source: str = "all", limit: int = 8) -> dict:
     """
-    Lấy tin tức thời sự nổi bật mới nhất trong nước (Việt Nam) và/hoặc quốc tế (thế giới)
-    từ 8 đầu báo lớn: VnExpress, Tuổi Trẻ, Thanh Niên, Dân Trí, VietnamNet, Người Lao Động, VTC News, BBC Tiếng Việt.
+    Lấy tin tức thời sự và công nghệ mới nhất trong nước, quốc tế và công nghệ
+    từ 11 đầu báo lớn: VnExpress, Tuổi Trẻ, Thanh Niên, Dân Trí, VietnamNet, Người Lao Động, VTC News,
+    Giáo dục & Thời đại, BBC Tiếng Việt, Tinh tế, Quản trị mạng.
     Mỗi tin đều có sẵn `url` để người dùng có thể yêu cầu đọc nội dung đầy đủ bằng `get_full_article`.
     Args:
-        scope: 'domestic' (trong nước), 'international' (quốc tế), hoặc 'both' (cả hai, mặc định).
-        source: 'all' (tổng hợp nhiều báo, mặc định), hoặc 'vnexpress', 'tuoitre', 'thanhnien', 'dantri', 'vietnamnet', 'nld', 'vtcnews', 'bbc'.
+        scope: 'domestic' (trong nước), 'international' (quốc tế), 'tech' (công nghệ), 'both' (trong nước & quốc tế, mặc định), hoặc 'all' (tất cả gồm cả công nghệ).
+        source: 'all' (tổng hợp nhiều báo, mặc định), hoặc 'vnexpress', 'tuoitre', 'thanhnien', 'dantri', 'vietnamnet', 'nld', 'vtcnews', 'giaoducthoidai', 'bbc', 'tinhte', 'quantrimang'.
         limit: Số lượng tin mỗi mục (mặc định 8, tối đa 15).
     """
     limit = max(1, min(int(limit), 15))
     scope_norm = (scope or "both").strip().lower()
     source_norm = (source or "all").strip().lower()
 
+    # If user explicitly asks for a tech source without setting scope='tech', include tech automatically
+    if source_norm in ("tinhte", "quantrimang") and scope_norm == "both":
+        scope_norm = "tech"
+
     scopes = []
-    if scope_norm in ("domestic", "trong_nuoc", "both"):
+    if scope_norm in ("domestic", "trong_nuoc", "both", "all"):
         scopes.append(("domestic_news", NEWS_FEEDS["domestic"]))
-    if scope_norm in ("international", "quoc_te", "world", "both"):
+    if scope_norm in ("international", "quoc_te", "world", "both", "all"):
         scopes.append(("international_news", NEWS_FEEDS["international"]))
+    if scope_norm in ("tech", "cong_nghe", "technology", "all"):
+        scopes.append(("tech_news", NEWS_FEEDS["tech"]))
     if not scopes:
         scopes = [
             ("domestic_news", NEWS_FEEDS["domestic"]),
@@ -222,6 +259,9 @@ def get_full_article(url: str) -> dict:
             "div.detail__content",
             "div.content-news-detail",
             "div.edittor-content",
+            "div.article__body",
+            "div.xf-body-content",
+            "div#main-content",
             "main article",
             "article",
         ]
