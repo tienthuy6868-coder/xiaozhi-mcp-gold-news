@@ -30,6 +30,13 @@ NEWS_FEEDS = {
         ("Người Lao Động", "nld", "https://nld.com.vn/rss/thoi-su.rss"),
         ("VTC News", "vtcnews", "https://vtcnews.vn/rss/thoi-su.rss"),
         ("Giáo dục & Thời đại", "giaoducthoidai", "https://giaoducthoidai.vn/rss/thoi-su.rss"),
+        ("Nhân Dân", "nhandan", "https://nhandan.vn/rss/home.rss"),
+        ("Báo Chính phủ", "baochinhphu", "https://baochinhphu.vn/home.rss"),
+        ("VTV", "vtv", "https://vtv.vn/rss/trong-nuoc.rss"),
+        ("VietnamPlus", "vietnamplus", "https://www.vietnamplus.vn/rss/home.rss"),
+        ("Báo Hải Phòng", "baohaiphong", "https://baohaiphong.vn/"),
+        ("Công an nhân dân", "cand", "https://cand.com.vn/rss/thoi-su.rss"),
+        ("Tiền Phong", "tienphong", "https://tienphong.vn/rss/thoi-su-12.rss"),
     ],
     "international": [
         ("VnExpress", "vnexpress", "https://vnexpress.net/rss/the-gioi.rss"),
@@ -40,10 +47,21 @@ NEWS_FEEDS = {
         ("Người Lao Động", "nld", "https://nld.com.vn/rss/quoc-te.rss"),
         ("VTC News", "vtcnews", "https://vtcnews.vn/rss/the-gioi.rss"),
         ("BBC Tiếng Việt", "bbc", "https://feeds.bbci.co.uk/vietnamese/rss.xml"),
+        ("Nhân Dân", "nhandan", "https://nhandan.vn/rss/the-gioi-1231.rss"),
+        ("VTV", "vtv", "https://vtv.vn/rss/the-gioi.rss"),
+        ("VietnamPlus", "vietnamplus", "https://www.vietnamplus.vn/rss/thegioi.rss"),
+        ("Công an nhân dân", "cand", "https://cand.com.vn/rss/the-gioi.rss"),
+        ("Tiền Phong", "tienphong", "https://tienphong.vn/rss/the-gioi-5.rss"),
     ],
     "tech": [
         ("Tinh tế", "tinhte", "https://tinhte.vn/rss"),
         ("Quản trị mạng", "quantrimang", "https://quantrimang.com/"),
+    ],
+    "sports": [
+        ("VnExpress Thể Thao", "vnexpress", "https://vnexpress.net/rss/the-thao.rss"),
+        ("Thể thao 247", "thethao247", "https://thethao247.vn/trang-chu.rss"),
+        ("Tuổi Trẻ Thể Thao", "tuoitre", "https://tuoitre.vn/rss/the-thao.rss"),
+        ("Thanh Niên Thể Thao", "thanhnien", "https://thanhnien.vn/rss/the-thao.rss"),
     ],
 }
 
@@ -70,14 +88,16 @@ def _fetch_single_feed(source_name: str, url: str, per_feed_limit: int) -> list[
     items_list = []
     try:
         body = _http_get(url, timeout=10)
-        if "quantrimang.com" in url:
+        if "quantrimang.com" in url or "baohaiphong.vn" in url:
             soup = BeautifulSoup(body, "html.parser")
             seen_urls = set()
+            base_domain = "https://quantrimang.com" if "quantrimang.com" in url else "https://baohaiphong.vn"
+            pattern = r"-\d{5,}$" if "quantrimang.com" in url else r"-\d{5,}\.html$"
             for a in soup.find_all("a", href=True):
                 href = a.get("href", "")
                 title = a.get_text(" ", strip=True)
-                if len(title) > 25 and re.search(r"-\d{5,}$", href):
-                    full_url = href if href.startswith("http") else f"https://quantrimang.com{href}"
+                if len(title) > 25 and re.search(pattern, href):
+                    full_url = href if href.startswith("http") else f"{base_domain}{href}"
                     if full_url not in seen_urls:
                         seen_urls.add(full_url)
                         items_list.append({
@@ -160,22 +180,25 @@ def get_gold_price() -> dict:
 @mcp.tool()
 def get_thoi_su_noi_bat(scope: str = "both", source: str = "all", limit: int = 8) -> dict:
     """
-    Lấy tin tức thời sự và công nghệ mới nhất trong nước, quốc tế và công nghệ
-    từ 11 đầu báo lớn: VnExpress, Tuổi Trẻ, Thanh Niên, Dân Trí, VietnamNet, Người Lao Động, VTC News,
-    Giáo dục & Thời đại, BBC Tiếng Việt, Tinh tế, Quản trị mạng.
+    Lấy tin tức thời sự, quốc tế, công nghệ và thể thao mới nhất từ các đầu báo lớn:
+    VnExpress, Tuổi Trẻ, Thanh Niên, Dân Trí, VietnamNet, Người Lao Động, VTC News,
+    Giáo dục & Thời đại, Nhân Dân, Báo Chính phủ, VTV, VietnamPlus, Báo Hải Phòng,
+    Công an nhân dân, Tiền Phong, BBC Tiếng Việt, Tinh tế, Quản trị mạng, Thể thao 247.
     Mỗi tin đều có sẵn `url` để người dùng có thể yêu cầu đọc nội dung đầy đủ bằng `get_full_article`.
     Args:
-        scope: 'domestic' (trong nước), 'international' (quốc tế), 'tech' (công nghệ), 'both' (trong nước & quốc tế, mặc định), hoặc 'all' (tất cả gồm cả công nghệ).
-        source: 'all' (tổng hợp nhiều báo, mặc định), hoặc 'vnexpress', 'tuoitre', 'thanhnien', 'dantri', 'vietnamnet', 'nld', 'vtcnews', 'giaoducthoidai', 'bbc', 'tinhte', 'quantrimang'.
+        scope: 'domestic' (trong nước), 'international' (quốc tế), 'tech' (công nghệ), 'sports' (thể thao), 'both' (trong nước & quốc tế, mặc định), hoặc 'all' (tất cả).
+        source: 'all' (tổng hợp nhiều báo, mặc định), hoặc 'vnexpress', 'tuoitre', 'thanhnien', 'dantri', 'vietnamnet', 'nld', 'vtcnews', 'giaoducthoidai', 'nhandan', 'baochinhphu', 'vtv', 'vietnamplus', 'baohaiphong', 'cand', 'tienphong', 'bbc', 'tinhte', 'quantrimang', 'thethao247'.
         limit: Số lượng tin mỗi mục (mặc định 8, tối đa 15).
     """
     limit = max(1, min(int(limit), 15))
     scope_norm = (scope or "both").strip().lower()
     source_norm = (source or "all").strip().lower()
 
-    # If user explicitly asks for a tech source without setting scope='tech', include tech automatically
+    # If user explicitly asks for a tech or sports source without setting scope, route automatically
     if source_norm in ("tinhte", "quantrimang") and scope_norm == "both":
         scope_norm = "tech"
+    elif source_norm == "thethao247" and scope_norm == "both":
+        scope_norm = "sports"
 
     scopes = []
     if scope_norm in ("domestic", "trong_nuoc", "both", "all"):
@@ -184,6 +207,8 @@ def get_thoi_su_noi_bat(scope: str = "both", source: str = "all", limit: int = 8
         scopes.append(("international_news", NEWS_FEEDS["international"]))
     if scope_norm in ("tech", "cong_nghe", "technology", "all"):
         scopes.append(("tech_news", NEWS_FEEDS["tech"]))
+    if scope_norm in ("sports", "the_thao", "sport", "all"):
+        scopes.append(("sports_news", NEWS_FEEDS["sports"]))
     if not scopes:
         scopes = [
             ("domestic_news", NEWS_FEEDS["domestic"]),
@@ -253,6 +278,7 @@ def get_full_article(url: str) -> dict:
         content_selectors = [
             "article.fck_detail",
             "div.detail-content",
+            "div.detail-content-body",
             "div.singular-content",
             "div.maincontent",
             "div.content-detail",
@@ -260,6 +286,11 @@ def get_full_article(url: str) -> dict:
             "div.content-news-detail",
             "div.edittor-content",
             "div.article__body",
+            "div.article-body",
+            "div.entry-content",
+            "div.cms-body",
+            "div#abody",
+            "div.post-content",
             "div.xf-body-content",
             "div#main-content",
             "main article",
