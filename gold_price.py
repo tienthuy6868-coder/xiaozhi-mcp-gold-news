@@ -269,7 +269,7 @@ def get_full_article(url: str) -> dict:
         for sel in content_selectors:
             container = soup.select_one(sel)
             if container:
-                for p in container.find_all("p"):
+                for p in container.select("p, span.xf-body-paragraph"):
                     txt = p.get_text(" ", strip=True)
                     if len(txt) > 25:
                         paragraphs.append(txt)
@@ -277,7 +277,7 @@ def get_full_article(url: str) -> dict:
                     break
 
         if not paragraphs:
-            for p in soup.find_all("p"):
+            for p in soup.select("p, span.xf-body-paragraph"):
                 txt = p.get_text(" ", strip=True)
                 if len(txt) > 40:
                     paragraphs.append(txt)
