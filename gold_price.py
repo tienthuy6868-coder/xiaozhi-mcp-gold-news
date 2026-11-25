@@ -26,11 +26,18 @@ NEWS_FEEDS = {
         ("Thanh Niên", "thanhnien", "https://thanhnien.vn/rss/thoi-su.rss"),
         ("Dân Trí", "dantri", "https://dantri.com.vn/rss/su-kien.rss"),
         ("VietnamNet", "vietnamnet", "https://vietnamnet.vn/rss/thoi-su.rss"),
+        ("Người Lao Động", "nld", "https://nld.com.vn/rss/thoi-su.rss"),
+        ("VTC News", "vtcnews", "https://vtcnews.vn/rss/thoi-su.rss"),
     ],
     "international": [
         ("VnExpress", "vnexpress", "https://vnexpress.net/rss/the-gioi.rss"),
         ("Tuổi Trẻ", "tuoitre", "https://tuoitre.vn/rss/the-gioi.rss"),
         ("Thanh Niên", "thanhnien", "https://thanhnien.vn/rss/the-gioi.rss"),
+        ("Dân Trí", "dantri", "https://dantri.com.vn/rss/the-gioi.rss"),
+        ("VietnamNet", "vietnamnet", "https://vietnamnet.vn/rss/the-gioi.rss"),
+        ("Người Lao Động", "nld", "https://nld.com.vn/rss/quoc-te.rss"),
+        ("VTC News", "vtcnews", "https://vtcnews.vn/rss/the-gioi.rss"),
+        ("BBC Tiếng Việt", "bbc", "https://feeds.bbci.co.uk/vietnamese/rss.xml"),
     ],
 }
 
@@ -121,17 +128,17 @@ def get_gold_price() -> dict:
 
 
 @mcp.tool()
-def get_thoi_su_noi_bat(scope: str = "both", source: str = "all", limit: int = 6) -> dict:
+def get_thoi_su_noi_bat(scope: str = "both", source: str = "all", limit: int = 8) -> dict:
     """
     Lấy tin tức thời sự nổi bật mới nhất trong nước (Việt Nam) và/hoặc quốc tế (thế giới)
-    từ nhiều đầu báo lớn: VnExpress, Tuổi Trẻ, Thanh Niên, Dân Trí, VietnamNet.
+    từ 8 đầu báo lớn: VnExpress, Tuổi Trẻ, Thanh Niên, Dân Trí, VietnamNet, Người Lao Động, VTC News, BBC Tiếng Việt.
     Mỗi tin đều có sẵn `url` để người dùng có thể yêu cầu đọc nội dung đầy đủ bằng `get_full_article`.
     Args:
         scope: 'domestic' (trong nước), 'international' (quốc tế), hoặc 'both' (cả hai, mặc định).
-        source: 'all' (tổng hợp nhiều báo, mặc định), hoặc 'vnexpress', 'tuoitre', 'thanhnien', 'dantri', 'vietnamnet'.
-        limit: Số lượng tin mỗi mục (mặc định 6, tối đa 12).
+        source: 'all' (tổng hợp nhiều báo, mặc định), hoặc 'vnexpress', 'tuoitre', 'thanhnien', 'dantri', 'vietnamnet', 'nld', 'vtcnews', 'bbc'.
+        limit: Số lượng tin mỗi mục (mặc định 8, tối đa 15).
     """
-    limit = max(1, min(int(limit), 12))
+    limit = max(1, min(int(limit), 15))
     scope_norm = (scope or "both").strip().lower()
     source_norm = (source or "all").strip().lower()
 
@@ -213,6 +220,9 @@ def get_full_article(url: str) -> dict:
             "div.maincontent",
             "div.content-detail",
             "div.detail__content",
+            "div.content-news-detail",
+            "div.edittor-content",
+            "main article",
             "article",
         ]
         paragraphs = []
